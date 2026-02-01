@@ -1,5 +1,6 @@
 streamlit
-tensorflow==2.19.0
+tensorflow
 pillow
 numpy
-h5py==3.11.0
+h5py
+
