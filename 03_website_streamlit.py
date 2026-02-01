@@ -1,27 +1,15 @@
 """
-SCRIPT C: WEBSITE KLASIFIKASI KOSTUM TARI - STREAMLIT
-======================================================
-Website interaktif untuk klasifikasi kostum tari tradisional Jawa Tengah
-menggunakan model CNN yang sudah dilatih.
-
-FITUR:
-- Upload & predict gambar kostum tari
-- Katalog informasi 5 jenis tarian
-- Visualisasi confidence score
-- Responsive dan user-friendly
+WEBSITE KLASIFIKASI KOSTUM TARI - STREAMLIT (Updated v2)
+=========================================================
+Support untuk model .h5 dengan error handling lebih baik
 
 Author: Fasya Maulinada
-Tanggal: Januari 2025
+Updated: Februari 2025
 """
 
 # ============================================================================
 # INSTALASI & IMPORT
 # ============================================================================
-
-# Install di terminal/cmd (bukan di script):
-"""
-pip install streamlit tensorflow pillow numpy
-"""
 
 import streamlit as st
 import tensorflow as tf
@@ -45,7 +33,9 @@ st.set_page_config(
 # ============================================================================
 
 # Path ke model dan file pendukung
-MODEL_PATH = 'final_model.h5'  # Ubah sesuai lokasi model Anda
+# Coba .h5 dulu, kalau tidak ada coba .keras
+MODEL_PATH_H5 = 'final_model.h5'
+MODEL_PATH_KERAS = 'final_model.keras'
 CLASS_INDICES_PATH = 'class_indices.json'
 
 # Ukuran gambar input model
@@ -145,24 +135,62 @@ TARI_INFO = {
 
 @st.cache_resource
 def load_model():
-    """Load trained model"""
+    """Load trained model - support both .h5 and .keras format"""
     try:
-        model = tf.keras.models.load_model(MODEL_PATH)
-        return model
+        # Coba load .h5 dulu
+        if os.path.exists(MODEL_PATH_H5):
+            st.info(f"📦 Loading model from {MODEL_PATH_H5}...")
+            model = tf.keras.models.load_model(MODEL_PATH_H5, compile=False)
+            st.success(f"✅ Model loaded successfully from .h5 file")
+            return model
+        
+        # Kalau tidak ada, coba .keras
+        elif os.path.exists(MODEL_PATH_KERAS):
+            st.info(f"📦 Loading model from {MODEL_PATH_KERAS}...")
+            model = tf.keras.models.load_model(MODEL_PATH_KERAS, compile=False)
+            st.success(f"✅ Model loaded successfully from .keras file")
+            return model
+        
+        else:
+            st.error("❌ Model file not found!")
+            st.error(f"Expected files: {MODEL_PATH_H5} or {MODEL_PATH_KERAS}")
+            st.info("**LANGKAH DEPLOYMENT:**")
+            st.info("1. Pastikan file berikut ada di folder yang sama dengan script ini:")
+            st.code(f"   - {MODEL_PATH_H5} (atau {MODEL_PATH_KERAS})\n   - {CLASS_INDICES_PATH}\n   - 03_website_streamlit.py")
+            return None
+            
     except Exception as e:
-        st.error(f"Error loading model: {e}")
-        st.info("Pastikan file 'final_model.keras' ada di folder yang sama dengan script ini.")
+        st.error(f"❌ Error loading model: {str(e)}")
+        st.error("**Possible solutions:**")
+        st.info("1. Make sure TensorFlow version matches training version")
+        st.info("2. Try converting model to .h5 format")
+        st.info("3. Check model file is not corrupted")
+        
+        with st.expander("🔧 See full error details"):
+            st.exception(e)
+        
         return None
 
 @st.cache_data
 def load_class_indices():
     """Load class mapping"""
     try:
-        with open(CLASS_INDICES_PATH, 'r') as f:
-            class_mapping = json.load(f)
-        return class_mapping
-    except:
-        # Default mapping jika file tidak ada
+        if os.path.exists(CLASS_INDICES_PATH):
+            with open(CLASS_INDICES_PATH, 'r') as f:
+                class_mapping = json.load(f)
+            return class_mapping
+        else:
+            st.warning(f"⚠️ {CLASS_INDICES_PATH} not found. Using default mapping.")
+            # Default mapping jika file tidak ada
+            return {
+                'tari_bedhaya': 'Tari Bedhaya',
+                'tari_dolalak': 'Tari Dolalak',
+                'tari_gambyong': 'Tari Gambyong',
+                'tari_golek': 'Tari Golek',
+                'tari_srimpi': 'Tari Srimpi'
+            }
+    except Exception as e:
+        st.error(f"Error loading class indices: {e}")
         return {
             'tari_bedhaya': 'Tari Bedhaya',
             'tari_dolalak': 'Tari Dolalak',
@@ -173,55 +201,72 @@ def load_class_indices():
 
 def preprocess_image(image):
     """Preprocessing gambar untuk prediksi"""
-    # Resize ke ukuran yang dibutuhkan model
-    img = image.resize((IMG_SIZE, IMG_SIZE))
-    
-    # Convert ke array
-    img_array = np.array(img)
-    
-    # Pastikan RGB (bukan RGBA)
-    if img_array.shape[-1] == 4:
-        img_array = img_array[:, :, :3]
-    
-    # Normalisasi (0-1)
-    img_array = img_array / 255.0
-    
-    # Tambah batch dimension
-    img_array = np.expand_dims(img_array, axis=0)
-    
-    return img_array
+    try:
+        # Resize ke ukuran yang dibutuhkan model
+        img = image.resize((IMG_SIZE, IMG_SIZE))
+        
+        # Convert ke array
+        img_array = np.array(img)
+        
+        # Pastikan RGB (bukan RGBA)
+        if len(img_array.shape) == 2:  # Grayscale
+            img_array = np.stack([img_array] * 3, axis=-1)
+        elif img_array.shape[-1] == 4:  # RGBA
+            img_array = img_array[:, :, :3]
+        
+        # Normalisasi (0-1)
+        img_array = img_array.astype(np.float32) / 255.0
+        
+        # Tambah batch dimension
+        img_array = np.expand_dims(img_array, axis=0)
+        
+        return img_array
+        
+    except Exception as e:
+        st.error(f"Error preprocessing image: {e}")
+        return None
 
 def predict_image(model, image, class_mapping):
     """Prediksi kelas gambar"""
-    # Preprocess
-    processed_img = preprocess_image(image)
-    
-    # Predict
-    predictions = model.predict(processed_img, verbose=0)
-    
-    # Get top prediction
-    predicted_class_idx = np.argmax(predictions[0])
-    confidence = predictions[0][predicted_class_idx] * 100
-    
-    # Map ke nama kelas
-    class_keys = list(class_mapping.keys())
-    predicted_class_key = class_keys[predicted_class_idx]
-    predicted_class_name = class_mapping[predicted_class_key]
-    
-    # Get all predictions dengan confidence
-    all_predictions = []
-    for idx, conf in enumerate(predictions[0]):
-        class_key = class_keys[idx]
-        class_name = class_mapping[class_key]
-        all_predictions.append({
-            'class': class_name,
-            'confidence': conf * 100
-        })
-    
-    # Sort berdasarkan confidence
-    all_predictions = sorted(all_predictions, key=lambda x: x['confidence'], reverse=True)
-    
-    return predicted_class_name, confidence, all_predictions
+    try:
+        # Preprocess
+        processed_img = preprocess_image(image)
+        
+        if processed_img is None:
+            return None, 0, []
+        
+        # Predict
+        predictions = model.predict(processed_img, verbose=0)
+        
+        # Get top prediction
+        predicted_class_idx = np.argmax(predictions[0])
+        confidence = predictions[0][predicted_class_idx] * 100
+        
+        # Map ke nama kelas
+        class_keys = list(class_mapping.keys())
+        predicted_class_key = class_keys[predicted_class_idx]
+        predicted_class_name = class_mapping[predicted_class_key]
+        
+        # Get all predictions dengan confidence
+        all_predictions = []
+        for idx, conf in enumerate(predictions[0]):
+            class_key = class_keys[idx]
+            class_name = class_mapping[class_key]
+            all_predictions.append({
+                'class': class_name,
+                'confidence': conf * 100
+            })
+        
+        # Sort berdasarkan confidence
+        all_predictions = sorted(all_predictions, key=lambda x: x['confidence'], reverse=True)
+        
+        return predicted_class_name, confidence, all_predictions
+        
+    except Exception as e:
+        st.error(f"Error during prediction: {e}")
+        with st.expander("🔧 See error details"):
+            st.exception(e)
+        return None, 0, []
 
 # ============================================================================
 # CUSTOM CSS
@@ -357,7 +402,7 @@ def home_page():
     
     with col2:
         st.image("https://via.placeholder.com/400x500?text=Tari+Jawa+Tengah", 
-                use_column_width=True)
+                use_container_width=True)
     
     # Features
     st.markdown("---")
@@ -369,7 +414,7 @@ def home_page():
         st.markdown("""
         <div class="info-card">
             <h4>🎯 Akurasi Tinggi</h4>
-            <p>Model dilatih dengan >1500 gambar dan mencapai akurasi >90%</p>
+            <p>Model dilatih dengan >1500 gambar</p>
         </div>
         """, unsafe_allow_html=True)
     
@@ -392,6 +437,11 @@ def home_page():
 def classification_page(model, class_mapping):
     """Halaman klasifikasi"""
     st.title("🎯 Klasifikasi Kostum Tari")
+    
+    if model is None:
+        st.error("❌ Model tidak dapat dimuat. Silakan hubungi administrator.")
+        st.stop()
+    
     st.markdown("Upload gambar kostum tari untuk mendapatkan prediksi jenis tariannya.")
     
     # Upload file
@@ -402,75 +452,85 @@ def classification_page(model, class_mapping):
     )
     
     if uploaded_file is not None:
-        # Display uploaded image
-        image = Image.open(uploaded_file)
-        
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            st.markdown("#### 📸 Gambar yang Diupload")
-            st.image(image, use_column_width=True)
-        
-        with col2:
-            st.markdown("#### 🤖 Hasil Klasifikasi")
+        try:
+            # Display uploaded image
+            image = Image.open(uploaded_file)
             
-            with st.spinner('Menganalisis gambar...'):
-                # Predict
-                predicted_class, confidence, all_predictions = predict_image(
-                    model, image, class_mapping
-                )
+            col1, col2 = st.columns([1, 1])
             
-            # Display result
-            st.markdown(f"""
-            <div class="result-container">
-                <div class="result-title">{predicted_class}</div>
-                <div class="confidence-score">{confidence:.2f}%</div>
-                <div>Confidence Score</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Confidence interpretation
-            if confidence >= 90:
-                st.success("✅ Prediksi sangat yakin!")
-            elif confidence >= 70:
-                st.info("ℹ️ Prediksi cukup yakin")
-            else:
-                st.warning("⚠️ Prediksi kurang yakin, coba gambar yang lebih jelas")
-        
-        # All predictions
-        st.markdown("---")
-        st.markdown("#### 📊 Semua Prediksi")
-        
-        for pred in all_predictions:
-            col1, col2 = st.columns([3, 1])
             with col1:
-                st.progress(pred['confidence'] / 100)
+                st.markdown("#### 📸 Gambar yang Diupload")
+                st.image(image, use_container_width=True)
+            
             with col2:
-                st.markdown(f"**{pred['confidence']:.1f}%**")
-            st.markdown(f"**{pred['class']}**")
-            st.markdown("")
-        
-        # Info tarian yang diprediksi
-        if predicted_class in TARI_INFO:
+                st.markdown("#### 🤖 Hasil Klasifikasi")
+                
+                with st.spinner('Menganalisis gambar...'):
+                    # Predict
+                    predicted_class, confidence, all_predictions = predict_image(
+                        model, image, class_mapping
+                    )
+                
+                if predicted_class is None:
+                    st.error("❌ Error saat melakukan prediksi")
+                    st.stop()
+                
+                # Display result
+                st.markdown(f"""
+                <div class="result-container">
+                    <div class="result-title">{predicted_class}</div>
+                    <div class="confidence-score">{confidence:.2f}%</div>
+                    <div>Confidence Score</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Confidence interpretation
+                if confidence >= 90:
+                    st.success("✅ Prediksi sangat yakin!")
+                elif confidence >= 70:
+                    st.info("ℹ️ Prediksi cukup yakin")
+                else:
+                    st.warning("⚠️ Prediksi kurang yakin, coba gambar yang lebih jelas")
+            
+            # All predictions
             st.markdown("---")
-            st.markdown(f"### 📖 Tentang {predicted_class}")
+            st.markdown("#### 📊 Semua Prediksi")
             
-            info = TARI_INFO[predicted_class]
+            for pred in all_predictions:
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.progress(pred['confidence'] / 100)
+                with col2:
+                    st.markdown(f"**{pred['confidence']:.1f}%**")
+                st.markdown(f"**{pred['class']}**")
+                st.markdown("")
             
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                st.markdown(f"**Deskripsi:**")
-                st.markdown(info['deskripsi'])
+            # Info tarian yang diprediksi
+            if predicted_class in TARI_INFO:
+                st.markdown("---")
+                st.markdown(f"### 📖 Tentang {predicted_class}")
                 
-                st.markdown(f"**Karakteristik:**")
-                for char in info['karakteristik']:
-                    st.markdown(f"- {char}")
+                info = TARI_INFO[predicted_class]
                 
-                st.markdown(f"**Asal:** {info['asal']}")
-            
-            with col2:
-                st.image(info['image'], use_column_width=True)
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    st.markdown(f"**Deskripsi:**")
+                    st.markdown(info['deskripsi'])
+                    
+                    st.markdown(f"**Karakteristik:**")
+                    for char in info['karakteristik']:
+                        st.markdown(f"- {char}")
+                    
+                    st.markdown(f"**Asal:** {info['asal']}")
+                
+                with col2:
+                    st.image(info['image'], use_container_width=True)
+                    
+        except Exception as e:
+            st.error(f"Error processing image: {e}")
+            with st.expander("🔧 See error details"):
+                st.exception(e)
     
     else:
         # Tampilkan contoh gambar
@@ -482,17 +542,17 @@ def classification_page(model, class_mapping):
         with col1:
             st.markdown("✅ **Pencahayaan Baik**")
             st.image("https://via.placeholder.com/200x200?text=Good+Lighting", 
-                    use_column_width=True)
+                    use_container_width=True)
         
         with col2:
             st.markdown("✅ **Kostum Jelas Terlihat**")
             st.image("https://via.placeholder.com/200x200?text=Clear+Costume", 
-                    use_column_width=True)
+                    use_container_width=True)
         
         with col3:
             st.markdown("✅ **Fokus pada Penari**")
             st.image("https://via.placeholder.com/200x200?text=Focused", 
-                    use_column_width=True)
+                    use_container_width=True)
 
 def catalog_page():
     """Halaman katalog tarian"""
@@ -520,10 +580,10 @@ def catalog_page():
                 st.markdown(info['asal'])
             
             with col2:
-                st.image(info['image'], use_column_width=True, 
+                st.image(info['image'], use_container_width=True, 
                         caption=f"Ilustrasi {tari_name}")
                 
-                # Fun fact atau info tambahan bisa ditambahkan di sini
+                # Fun fact atau info tambahan
                 with st.expander("ℹ️ Tahukah Anda?"):
                     st.markdown(f"""
                     {tari_name} memiliki sejarah panjang dalam budaya Jawa Tengah 
@@ -546,7 +606,7 @@ def about_page():
     
     #### 1. Dataset
     - Total: **1,500 gambar** (300 per kelas)
-    - Sumber: Scraping dari internet dan dokumentasi sanggar
+    - Sumber: Web scraping dan dokumentasi
     - Pembagian: 70% Training | 15% Validation | 15% Testing
     
     #### 2. Model Deep Learning
@@ -561,22 +621,6 @@ def about_page():
     - **Optimizer:** Adam
     - **Loss Function:** Categorical Crossentropy
     
-    #### 4. Hasil Evaluasi
-    """)
-    
-    # Tampilkan metrik (ganti dengan hasil aktual)
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Accuracy", "92.5%", "+2.5%")
-    with col2:
-        st.metric("Precision", "91.8%", "+1.8%")
-    with col3:
-        st.metric("Recall", "92.1%", "+2.1%")
-    with col4:
-        st.metric("F1-Score", "91.9%", "+1.9%")
-    
-    st.markdown("""
     ### 👨‍💻 Pengembang
     
     **Fasya Maulinada**  
@@ -593,20 +637,12 @@ def about_page():
     - **Backend:** Python, TensorFlow, Keras
     - **Frontend:** Streamlit
     - **Deployment:** Streamlit Cloud
-    - **Storage:** Google Drive
-    
-    ### 📞 Kontak
-    
-    Untuk pertanyaan atau saran, silakan hubungi:
-    - Email: fasya.maulinada@example.com (ganti dengan email asli)
-    - GitHub: github.com/fasyamaulinada (ganti dengan GitHub asli)
     
     ### 🙏 Acknowledgments
     
     Terima kasih kepada:
     - Universitas Muria Kudus
     - Dinas Kebudayaan Jawa Tengah
-    - Sanggar-sanggar tari yang mendukung penelitian
     - Semua pihak yang telah membantu
     """)
 
@@ -641,6 +677,7 @@ def main():
     if model is not None:
         st.sidebar.success("✅ Model: Loaded")
         st.sidebar.info(f"📦 Classes: {len(class_mapping)}")
+        st.sidebar.info(f"📁 Format: {'H5' if os.path.exists(MODEL_PATH_H5) else 'Keras'}")
     else:
         st.sidebar.error("❌ Model: Not Loaded")
         st.sidebar.warning("Pastikan file model tersedia")
@@ -658,10 +695,7 @@ def main():
         home_page()
     
     elif menu == "🎯 Klasifikasi":
-        if model is not None:
-            classification_page(model, class_mapping)
-        else:
-            st.error("❌ Model tidak dapat dimuat. Pastikan file model tersedia.")
+        classification_page(model, class_mapping)
     
     elif menu == "📚 Katalog":
         catalog_page()
@@ -671,99 +705,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# ============================================================================
-# CARA MENJALANKAN
-# ============================================================================
-"""
-LANGKAH DEPLOYMENT:
-
-1. PERSIAPAN FILE:
-   Pastikan file berikut ada di folder yang sama:
-   - 03_website_streamlit.py (script ini)
-   - final_model.keras (model hasil training)
-   - class_indices.json (mapping kelas)
-
-2. INSTALL DEPENDENCIES:
-   pip install streamlit tensorflow pillow numpy
-
-3. JALANKAN LOKAL:
-   streamlit run 03_website_streamlit.py
-
-4. DEPLOYMENT KE STREAMLIT CLOUD:
-   
-   a. Buat file requirements.txt:
-      ```
-      streamlit==1.31.0
-      tensorflow==2.15.0
-      pillow==10.2.0
-      numpy==1.26.3
-      ```
-   
-   b. Upload file ke GitHub:
-      - 03_website_streamlit.py
-      - final_model.keras
-      - class_indices.json
-      - requirements.txt
-   
-   c. Deploy di Streamlit Cloud:
-      - Buka https://streamlit.io/cloud
-      - Connect dengan GitHub
-      - Pilih repository
-      - Deploy!
-   
-   d. CATATAN: Model keras (.keras) cukup besar (~14MB)
-      Jika GitHub menolak, alternatif:
-      - Upload model ke Google Drive
-      - Modify code untuk download model dari Drive
-      - Atau gunakan model TFLite yang lebih kecil
-
-5. HOSTING MODEL DI GOOGLE DRIVE:
-   
-   Jika model terlalu besar untuk GitHub:
-   
-   ```python
-   import gdown
-   
-   # Di awal script, tambahkan:
-   MODEL_URL = 'https://drive.google.com/uc?id=YOUR_FILE_ID'
-   MODEL_PATH = 'final_model.keras'
-   
-   @st.cache_resource
-   def load_model():
-       if not os.path.exists(MODEL_PATH):
-           with st.spinner('Downloading model...'):
-               gdown.download(MODEL_URL, MODEL_PATH, quiet=False)
-       return tf.keras.models.load_model(MODEL_PATH)
-   ```
-
-TROUBLESHOOTING:
-
-Q: Error "ModuleNotFoundError: No module named 'tensorflow'"
-A: Install: pip install tensorflow
-
-Q: Model terlalu besar untuk upload
-A: Gunakan model TFLite atau host di Google Drive
-
-Q: Streamlit Cloud out of memory
-A: Optimize model atau upgrade plan
-
-Q: Gambar tidak muncul
-A: Ganti placeholder URL dengan gambar asli dari dokumentasi
-
-TIPS OPTIMIZATION:
-
-1. Gunakan st.cache untuk fungsi berat
-2. Compress gambar sebelum upload
-3. Lazy load image di katalog
-4. Monitor memory usage di Streamlit Cloud
-
-NEXT STEPS:
-
-1. Ganti placeholder images dengan gambar asli
-2. Tambah fitur download hasil klasifikasi
-3. Tambah history klasifikasi
-4. Implementasi feedback mechanism
-5. Add analytics untuk tracking usage
-"""
