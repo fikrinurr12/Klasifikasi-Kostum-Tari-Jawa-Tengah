@@ -1,6 +1,6 @@
 streamlit
-tensorflow
+tensorflow==2.19.0
+h5py==3.11.0
 pillow
-numpy
-h5py
-
+numpy<2.0.0
+protobuf<5.0.0
