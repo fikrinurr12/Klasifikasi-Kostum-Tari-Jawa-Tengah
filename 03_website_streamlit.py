@@ -45,7 +45,7 @@ st.set_page_config(
 # ============================================================================
 
 # Path ke model dan file pendukung
-MODEL_PATH = 'final_model.keras'  # Ubah sesuai lokasi model Anda
+MODEL_PATH = 'final_model.h5'  # Ubah sesuai lokasi model Anda
 CLASS_INDICES_PATH = 'class_indices.json'
 
 # Ukuran gambar input model
